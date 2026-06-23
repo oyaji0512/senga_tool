@@ -1,0 +1,5 @@
+streamlit
+opencv-python
+pillow==9.5.0
+pymupdf==1.23.26
+numpy
