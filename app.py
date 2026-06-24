@@ -24,9 +24,15 @@ def pdf_to_pngs(pdf_path):
 # =========================
 # AI補正付き 前処理
 # =========================
-def preprocess_image(img_path, mode, blur_sigma, edge_sigma, thickness):
+def preprocess_image(img_path, mode, blur_sigma, edge_sigma, thickness, photo_auto):
     img = Image.open(img_path).convert("L")
     img = np.array(img)
+
+    # 写真用自動補正（Photo Auto Enhance）
+    if photo_auto and mode == "photo":
+        img = exposure.equalize_adapthist(img)
+        img = filters.gaussian(img, sigma=1.0)
+        img = (img * 255).astype(np.uint8)
 
     # ぼかし（ノイズ除去）
     if blur_sigma > 0:
@@ -41,15 +47,15 @@ def preprocess_image(img_path, mode, blur_sigma, edge_sigma, thickness):
         processed = (img > thresh).astype(np.uint8) * 255
 
     elif mode == "normal":
-        img = filters.median(img, morphology.disk(2))
-        img = exposure.equalize_adapthist(img)
-        edges = feature.canny(img, sigma=edge_sigma)
+        img_m = filters.median(img, morphology.disk(2))
+        img_m = exposure.equalize_adapthist(img_m)
+        edges = feature.canny(img_m, sigma=edge_sigma)
         processed = (edges * 255).astype(np.uint8)
 
     elif mode == "strong":
-        img = filters.median(img, morphology.disk(3))
-        img = exposure.equalize_adapthist(img)
-        edges = feature.canny(img, sigma=edge_sigma + 1)
+        img_m = filters.median(img, morphology.disk(3))
+        img_m = exposure.equalize_adapthist(img_m)
+        edges = feature.canny(img_m, sigma=edge_sigma + 1)
         processed = (edges * 255).astype(np.uint8)
 
     elif mode == "thinning":
@@ -57,6 +63,18 @@ def preprocess_image(img_path, mode, blur_sigma, edge_sigma, thickness):
         binary = img > thresh
         thin = morphology.thin(binary)
         processed = (thin * 255).astype(np.uint8)
+
+    elif mode == "simple":
+        # CAD図面向け：高速・クッキリ
+        thresh = filters.threshold_otsu(img)
+        binary = img > thresh
+        processed = (binary * 255).astype(np.uint8)
+
+    elif mode == "photo":
+        # 写真用リアル線画：細部も残す
+        img_eq = exposure.equalize_adapthist(img)
+        edges = feature.canny(img_eq, sigma=edge_sigma)
+        processed = (edges * 255).astype(np.uint8)
 
     else:
         processed = img
@@ -83,8 +101,8 @@ def auto_potrace_params(img):
 # =========================
 # PNG → SVG 変換
 # =========================
-def png_to_svg(png_path, mode, blur_sigma, edge_sigma, thickness):
-    img = preprocess_image(png_path, mode, blur_sigma, edge_sigma, thickness)
+def png_to_svg(png_path, mode, blur_sigma, edge_sigma, thickness, photo_auto):
+    img = preprocess_image(png_path, mode, blur_sigma, edge_sigma, thickness, photo_auto)
 
     temp_bmp = tempfile.NamedTemporaryFile(delete=False, suffix=".bmp")
     Image.fromarray(img).save(temp_bmp.name)
@@ -111,14 +129,22 @@ def png_to_svg(png_path, mode, blur_sigma, edge_sigma, thickness):
 st.set_page_config(page_title="線画にせんか？", layout="wide")
 
 st.title("✏️ 線画にせんか？")
-st.write("PDF または画像を線画 SVG に変換します。（AI補正・プレビュー対応）")
+st.write("PDF または画像を線画 SVG に変換します。（全機能版・AI補正対応）")
 
 uploaded_file = st.file_uploader("PDF または PNG/JPG を選択", type=["pdf", "png", "jpg", "jpeg"])
 
-# 前処理モード
+# 前処理モード（全モード）
 mode = st.selectbox(
     "前処理モードを選択",
-    ["なし（raw）", "軽め（light）", "標準（normal）", "強め（strong）", "細線化（thinning）"]
+    [
+        "なし（raw）",
+        "軽め（light）",
+        "標準（normal）",
+        "強め（strong）",
+        "細線化（thinning）",
+        "簡易版（simple）",
+        "写真用（photo）",
+    ]
 )
 
 mode_key = {
@@ -126,7 +152,9 @@ mode_key = {
     "軽め（light）": "light",
     "標準（normal）": "normal",
     "強め（strong）": "strong",
-    "細線化（thinning）": "thinning"
+    "細線化（thinning）": "thinning",
+    "簡易版（simple）": "simple",
+    "写真用（photo）": "photo",
 }[mode]
 
 # AI補正スライダー
@@ -134,6 +162,7 @@ st.subheader("AI補正（リアルタイム反映）")
 blur_sigma = st.slider("ぼかし量（ノイズ除去）", 0.0, 3.0, 0.0, 0.1)
 edge_sigma = st.slider("エッジ強調（Canny σ）", 0.5, 3.0, 1.0, 0.1)
 thickness = st.slider("線の太さ（膨張）", 0, 5, 0)
+photo_auto = st.checkbox("写真用自動補正を有効にする（Photo Auto Enhance）", value=True)
 
 if uploaded_file:
     st.success("ファイルを読み込みました！")
@@ -157,19 +186,19 @@ if uploaded_file:
     # ページ切り替え
     page = st.number_input("プレビューするページを選択", 1, len(png_list), 1)
 
-    # 線画プレビュー生成
+    # 線画プレビュー生成（全モード + AI補正反映）
     processed = preprocess_image(
         png_list[page - 1],
         mode_key,
         blur_sigma,
         edge_sigma,
-        thickness
+        thickness,
+        photo_auto,
     )
     preview_img = Image.fromarray(processed)
 
     # 背景色切り替え
     bg_option = st.radio("背景色を選択", ["白（デフォルト）", "黒", "反転"])
-
     base_img = preview_img.convert("RGB")
 
     if bg_option == "白（デフォルト）":
@@ -178,17 +207,27 @@ if uploaded_file:
         shown_img = ImageOps.invert(base_img)
 
     st.subheader("プレビュー")
-    st.image(shown_img, caption=f"{page} ページ目のプレビュー（{bg_option}）", use_column_width=True)
+    st.image(
+        shown_img,
+        caption=f"{page} ページ目のプレビュー（{mode} / {bg_option}）",
+        use_column_width=True,
+    )
 
-    # SVG変換
+    # SVG変換（Simple/Photo含む全モード対応）
     if st.button("SVG に変換する"):
         svg_files = []
-
         progress = st.progress(0)
-        for i, png in enumerate(png_list):
-            svg_path = png_to_svg(png, mode_key, blur_sigma, edge_sigma, thickness)
-            svg_files.append(svg_path)
 
+        for i, png in enumerate(png_list):
+            svg_path = png_to_svg(
+                png,
+                mode_key,
+                blur_sigma,
+                edge_sigma,
+                thickness,
+                photo_auto,
+            )
+            svg_files.append(svg_path)
             progress.progress((i + 1) / len(png_list))
 
         st.success("変換が完了しました！")
@@ -203,5 +242,5 @@ if uploaded_file:
                 label="全ページを ZIP でダウンロード",
                 data=f,
                 file_name="all_pages.zip",
-                mime="application/zip"
+                mime="application/zip",
             )
