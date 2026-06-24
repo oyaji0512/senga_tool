@@ -2,7 +2,7 @@ import streamlit as st
 import tempfile
 import subprocess
 import zipfile
-from PIL import Image
+from PIL import Image, ImageOps
 import numpy as np
 import fitz  # PyMuPDF
 from skimage import filters, morphology, exposure, feature
@@ -142,8 +142,18 @@ if uploaded_file:
     page = st.number_input("プレビューするページを選択", 1, len(png_list), 1)
     preview_img = Image.open(png_list[page - 1])
 
+    # =========================
+    # 背景色切り替え UI
+    # =========================
+    bg_option = st.radio("背景色を選択", ["黒（デフォルト）", "白", "反転"])
+
+    if bg_option == "白":
+        preview_img = ImageOps.invert(preview_img.convert("RGB"))
+    elif bg_option == "反転":
+        preview_img = ImageOps.invert(preview_img.convert("RGB"))
+
     st.subheader("プレビュー")
-    st.image(preview_img, caption=f"{page} ページ目のプレビュー", use_column_width=True)
+    st.image(preview_img, caption=f"{page} ページ目のプレビュー（{bg_option}）", use_column_width=True)
 
     # =========================
     # SVG 変換
