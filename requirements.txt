@@ -1,5 +1,5 @@
 opencv-python-headless==4.9.0.80
 pillow>=10.2.0
 streamlit
-PyMuPDF
+pymupdf
 
