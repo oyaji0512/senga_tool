@@ -1,12 +1,11 @@
 import streamlit as st
 import tempfile
-import os
 import subprocess
 import zipfile
 from PIL import Image
 import numpy as np
 import fitz  # PyMuPDF
-from skimage import filters, morphology, exposure, util, feature
+from skimage import filters, morphology, exposure, feature
 
 # =========================
 # PDF → PNG 変換
@@ -121,6 +120,7 @@ mode_key = {
 if uploaded_file:
     st.success("ファイルを読み込みました！")
 
+    # 一時ファイルに保存
     temp_input = tempfile.NamedTemporaryFile(delete=False)
     temp_input.write(uploaded_file.read())
     temp_input.close()
@@ -137,11 +137,13 @@ if uploaded_file:
     st.write(f"ページ数：{len(png_list)}")
 
     # =========================
-    # プレビュー表示（1ページ目）
+    # ページ切り替え UI
     # =========================
+    page = st.number_input("プレビューするページを選択", 1, len(png_list), 1)
+    preview_img = Image.open(png_list[page - 1])
+
     st.subheader("プレビュー")
-    preview_img = Image.open(png_list[0])
-    st.image(preview_img, caption="1ページ目のプレビュー", use_column_width=True)
+    st.image(preview_img, caption=f"{page} ページ目のプレビュー", use_column_width=True)
 
     # =========================
     # SVG 変換
