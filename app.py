@@ -146,4 +146,3 @@ if uploaded_file:
                 file_name="all_pages.zip",
                 mime="application/zip"
             )
-
