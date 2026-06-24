@@ -145,15 +145,19 @@ if uploaded_file:
     # =========================
     # 背景色切り替え UI
     # =========================
-    bg_option = st.radio("背景色を選択", ["黒（デフォルト）", "白", "反転"])
+    bg_option = st.radio("背景色を選択", ["白（デフォルト）", "黒", "反転"])
 
-    if bg_option == "白":
-        preview_img = ImageOps.invert(preview_img.convert("RGB"))
-    elif bg_option == "反転":
-        preview_img = ImageOps.invert(preview_img.convert("RGB"))
+    base_img = preview_img.convert("RGB")
+
+    if bg_option == "白（デフォルト）":
+        shown_img = base_img
+    elif bg_option == "黒":
+        shown_img = ImageOps.invert(base_img)
+    else:  # 反転
+        shown_img = ImageOps.invert(base_img)
 
     st.subheader("プレビュー")
-    st.image(preview_img, caption=f"{page} ページ目のプレビュー（{bg_option}）", use_column_width=True)
+    st.image(shown_img, caption=f"{page} ページ目のプレビュー（{bg_option}）", use_column_width=True)
 
     # =========================
     # SVG 変換
