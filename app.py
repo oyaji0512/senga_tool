@@ -125,6 +125,7 @@ if uploaded_file:
     temp_input.write(uploaded_file.read())
     temp_input.close()
 
+    # PDF or Image → PNG list
     if uploaded_file.name.lower().endswith(".pdf"):
         png_list = pdf_to_pngs(temp_input.name)
     else:
@@ -135,6 +136,16 @@ if uploaded_file:
 
     st.write(f"ページ数：{len(png_list)}")
 
+    # =========================
+    # プレビュー表示（1ページ目）
+    # =========================
+    st.subheader("プレビュー")
+    preview_img = Image.open(png_list[0])
+    st.image(preview_img, caption="1ページ目のプレビュー", use_column_width=True)
+
+    # =========================
+    # SVG 変換
+    # =========================
     if st.button("SVG に変換する"):
         svg_files = []
 
@@ -161,6 +172,3 @@ if uploaded_file:
                 file_name="all_pages.zip",
                 mime="application/zip"
             )
-
-
-
