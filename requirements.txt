@@ -1,5 +1,5 @@
 streamlit
 opencv-python
 pillow==9.5.0
-pymupdf==1.23.22
+pymupdf==1.23.21
 numpy
