@@ -5,9 +5,11 @@ import subprocess
 import zipfile
 from PIL import Image
 import fitz  # PyMuPDF
+import cv2
+import numpy as np
 
 # =========================
-# PDF → PNG 変換（Poppler）
+# PDF → PNG 変換（PyMuPDF）
 # =========================
 def pdf_to_pngs(pdf_path):
     pdf = fitz.open(pdf_path)
@@ -24,36 +26,89 @@ def pdf_to_pngs(pdf_path):
     return png_paths
 
 # =========================
+# OpenCV 前処理
+# =========================
+def preprocess_image(img_path, mode):
+    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+
+    if mode == "raw":
+        return img
+
+    # 軽め
+    if mode == "light":
+        img = cv2.GaussianBlur(img, (3, 3), 0)
+        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return img
+
+    # 標準
+    if mode == "normal":
+        img = cv2.medianBlur(img, 3)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        img = clahe.apply(img)
+        img = cv2.Laplacian(img, cv2.CV_8U)
+        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        kernel = np.ones((2, 2), np.uint8)
+        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
+        return img
+
+    # 強め
+    if mode == "strong":
+        img = cv2.medianBlur(img, 5)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        img = clahe.apply(img)
+        img = cv2.Laplacian(img, cv2.CV_8U)
+        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        kernel = np.ones((3, 3), np.uint8)
+        img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
+        return img
+
+    # 細線化（Zhang-Suen）
+    if mode == "thinning":
+        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        img = cv2.ximgproc.thinning(img)
+        return img
+
+    return img
+
+# =========================
+# Potrace 自動最適化
+# =========================
+def auto_potrace_params(img):
+    white_ratio = np.mean(img > 128)
+
+    if white_ratio > 0.85:
+        return {"turd": "5", "alpha": "0.5", "opt": "0.2"}
+    elif white_ratio > 0.6:
+        return {"turd": "3", "alpha": "0.7", "opt": "0.3"}
+    else:
+        return {"turd": "2", "alpha": "1.0", "opt": "0.4"}
+
+# =========================
 # PNG → SVG 変換（Potrace）
 # =========================
 def png_to_svg(png_path, mode="normal"):
+    # OpenCV 前処理
+    img = preprocess_image(png_path, mode)
+
+    # 一時BMP保存
     temp_bmp = tempfile.NamedTemporaryFile(delete=False, suffix=".bmp")
+    cv2.imwrite(temp_bmp.name, img)
+
+    # Potrace 自動パラメータ
+    params = auto_potrace_params(img)
+
     temp_svg = tempfile.NamedTemporaryFile(delete=False, suffix=".svg")
 
-    # mkbitmap（前処理）
-    mkbitmap_cmd = [
-        "mkbitmap",
-        "-o", temp_bmp.name,
-        png_path
-    ]
-
-    # モード別のパラメータ
-    if mode == "light":
-        mkbitmap_cmd.insert(1, "-t")
-        mkbitmap_cmd.insert(2, "0.45")
-    elif mode == "strong":
-        mkbitmap_cmd.insert(1, "-t")
-        mkbitmap_cmd.insert(2, "0.65")
-
-    subprocess.run(mkbitmap_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    # potrace（SVG 生成）
     potrace_cmd = [
         "potrace",
         "-s",
         "-o", temp_svg.name,
+        "--turdsize", params["turd"],
+        "--alphamax", params["alpha"],
+        "--opttolerance", params["opt"],
         temp_bmp.name
     ]
+
     subprocess.run(potrace_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     return temp_svg.name
@@ -69,25 +124,25 @@ st.write("PDF または画像を線画 SVG に変換します。")
 uploaded_file = st.file_uploader("PDF または PNG/JPG を選択", type=["pdf", "png", "jpg", "jpeg"])
 
 mode = st.selectbox(
-    "線画モードを選択",
-    ["標準（normal）", "明るめ（light）", "濃いめ（strong）"]
+    "前処理モードを選択",
+    ["なし（raw）", "軽め（light）", "標準（normal）", "強め（strong）", "細線化（thinning）"]
 )
 
 mode_key = {
+    "なし（raw）": "raw",
+    "軽め（light）": "light",
     "標準（normal）": "normal",
-    "明るめ（light）": "light",
-    "濃いめ（strong）": "strong"
+    "強め（strong）": "strong",
+    "細線化（thinning）": "thinning"
 }[mode]
 
 if uploaded_file:
     st.success("ファイルを読み込みました！")
 
-    # 一時保存
     temp_input = tempfile.NamedTemporaryFile(delete=False)
     temp_input.write(uploaded_file.read())
     temp_input.close()
 
-    # PDF or 画像判定
     if uploaded_file.name.lower().endswith(".pdf"):
         png_list = pdf_to_pngs(temp_input.name)
     else:
@@ -98,7 +153,6 @@ if uploaded_file:
 
     st.write(f"ページ数：{len(png_list)}")
 
-    # 変換ボタン
     if st.button("SVG に変換する"):
         svg_files = []
 
@@ -110,7 +164,6 @@ if uploaded_file:
 
         st.success("変換が完了しました！")
 
-        # 個別ダウンロード
         for idx, svg in enumerate(svg_files):
             with open(svg, "rb") as f:
                 st.download_button(
@@ -120,7 +173,6 @@ if uploaded_file:
                     mime="image/svg+xml"
                 )
 
-        # ZIP まとめ
         zip_path = tempfile.NamedTemporaryFile(delete=False, suffix=".zip").name
         with zipfile.ZipFile(zip_path, "w") as zipf:
             for idx, svg in enumerate(svg_files):
@@ -133,128 +185,3 @@ if uploaded_file:
                 file_name="all_pages.zip",
                 mime="application/zip"
             )
-
-# =========================
-# exe 内で Streamlit を起動
-# =========================
-if __name__ == "__main__":
-    import time
-    import webbrowser
-    import sys
-
-    # exe 内でのカレントディレクトリ調整
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
-    # Streamlit サーバー起動
-    subprocess.Popen(
-        [sys.executable, "-m", "streamlit", "run", "app.py", "--server.port", "8501"]
-    )
-
-    time.sleep(2)
-    webbrowser.open("http://localhost:8501")
-
-if __name__ == "__main__":
-    import time
-    import webbrowser
-    import sys
-    import os
-
-    # exe 内でのカレントディレクトリ調整
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
-    # Streamlit がすでに起動しているか確認
-    import socket
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.connect(("localhost", 8501))
-        s.close()
-        # すでに起動している場合はブラウザだけ開く
-        webbrowser.open("http://localhost:8501")
-    except ConnectionRefusedError:
-        # 起動していない場合はサーバーを立ち上げる
-        subprocess.Popen(
-            [sys.executable, "-m", "streamlit", "run", "app.py", "--server.port", "8501"]
-        )
-        time.sleep(2)
-        webbrowser.open("http://localhost:8501")
-
-if __name__ == "__main__":
-    import time
-    import webbrowser
-    import sys
-    import os
-
-    # exe 内でのカレントディレクトリ調整
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
-    # Streamlit がすでに起動しているか確認
-    import socket
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.connect(("localhost", 8501))
-        s.close()
-        # すでに起動している場合はブラウザだけ開く
-        webbrowser.open("http://localhost:8501")
-    except ConnectionRefusedError:
-        # 起動していない場合はサーバーを立ち上げる
-        subprocess.Popen(
-            [sys.executable, "-m", "streamlit", "run", "app.py", "--server.port", "8501"]
-        )
-        time.sleep(2)
-        webbrowser.open("http://localhost:8501")
-
-import os
-import sys
-import subprocess
-import time
-import webbrowser
-import socket
-
-def is_streamlit_running():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.connect(("localhost", 8501))
-        s.close()
-        return True
-    except ConnectionRefusedError:
-        return False
-
-if __name__ == "__main__":
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
-    # Streamlit が起動していなければ起動
-    if not is_streamlit_running():
-        subprocess.Popen(
-            [sys.executable, "-m", "streamlit", "run", os.path.abspath(__file__), "--server.port", "8501"]
-        )
-        time.sleep(2)
-
-    # 必ずブラウザを開く
-    webbrowser.open("http://localhost:8501")
-
-import os
-import subprocess
-import sys
-
-def run_streamlit():
-    script_path = os.path.abspath(sys.argv[0])
-    cmd = [
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
-        script_path,
-        "--server.headless=true",
-        "--browser.gatherUsageStats=false"
-    ]
-    subprocess.Popen(cmd)
-
-# PyInstaller の再実行を防ぐ
-if getattr(sys, 'frozen', False):
-    # exe のときだけブラウザを開く
-    run_streamlit()
-else:
-    # Python 実行時は普通に Streamlit が動く
-    import streamlit as st
-    # ここに通常の Streamlit アプリのコードを書く
-
