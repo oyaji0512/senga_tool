@@ -4,9 +4,9 @@ import os
 import subprocess
 import zipfile
 from PIL import Image
-import fitz  # PyMuPDF
-import cv2
 import numpy as np
+import fitz  # PyMuPDF
+from skimage import filters, morphology, exposure, util, feature
 
 # =========================
 # PDF → PNG 変換
@@ -23,51 +23,37 @@ def pdf_to_pngs(pdf_path):
     return png_paths
 
 # =========================
-# OpenCV 前処理
+# 前処理（OpenCV 不使用）
 # =========================
 def preprocess_image(img_path, mode):
-    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    img = Image.open(img_path).convert("L")
+    img = np.array(img)
 
     if mode == "raw":
         return img
 
     if mode == "light":
-        img = cv2.GaussianBlur(img, (3, 3), 0)
-        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        return img
+        img = filters.gaussian(img, sigma=1)
+        thresh = filters.threshold_otsu(img)
+        return (img > thresh).astype(np.uint8) * 255
 
     if mode == "normal":
-        img = cv2.medianBlur(img, 3)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        img = clahe.apply(img)
-        img = cv2.Laplacian(img, cv2.CV_8U)
-        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        kernel = np.ones((2, 2), np.uint8)
-        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
-        return img
+        img = filters.median(img, morphology.disk(2))
+        img = exposure.equalize_adapthist(img)
+        edges = feature.canny(img, sigma=1)
+        return (edges * 255).astype(np.uint8)
 
     if mode == "strong":
-        img = cv2.medianBlur(img, 5)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        img = clahe.apply(img)
-        img = cv2.Laplacian(img, cv2.CV_8U)
-        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        kernel = np.ones((3, 3), np.uint8)
-        img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
-        return img
+        img = filters.median(img, morphology.disk(3))
+        img = exposure.equalize_adapthist(img)
+        edges = feature.canny(img, sigma=2)
+        return (edges * 255).astype(np.uint8)
 
     if mode == "thinning":
-        # 二値化
-        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        # ximgproc がある場合のみ細線化
-        if hasattr(cv2, "ximgproc") and hasattr(cv2.ximgproc, "thinning"):
-            img = cv2.ximgproc.thinning(img)
-        else:
-            # Cloud では ximgproc が無いので、そのまま返す
-            pass
-
-        return img
+        thresh = filters.threshold_otsu(img)
+        binary = img > thresh
+        thin = morphology.thin(binary)
+        return (thin * 255).astype(np.uint8)
 
     return img
 
@@ -91,7 +77,7 @@ def png_to_svg(png_path, mode="normal"):
     img = preprocess_image(png_path, mode)
 
     temp_bmp = tempfile.NamedTemporaryFile(delete=False, suffix=".bmp")
-    cv2.imwrite(temp_bmp.name, img)
+    Image.fromarray(img).save(temp_bmp.name)
 
     params = auto_potrace_params(img)
 
@@ -115,7 +101,7 @@ def png_to_svg(png_path, mode="normal"):
 st.set_page_config(page_title="線画にせんか？", layout="wide")
 
 st.title("✏️ 線画にせんか？")
-st.write("PDF または画像を線画 SVG に変換します。")
+st.write("PDF または画像を線画 SVG に変換します。（OpenCV 不使用・Cloud 完全対応）")
 
 uploaded_file = st.file_uploader("PDF または PNG/JPG を選択", type=["pdf", "png", "jpg", "jpeg"])
 
@@ -157,14 +143,12 @@ if uploaded_file:
             svg_path = png_to_svg(png, mode_key)
             svg_files.append(svg_path)
 
-            # 更新頻度を下げて安定化
             if i % 2 == 0:
                 progress.progress((i + 1) / len(png_list))
 
         progress.progress(1.0)
         st.success("変換が完了しました！")
 
-        # ZIP まとめ
         zip_path = tempfile.NamedTemporaryFile(delete=False, suffix=".zip").name
         with zipfile.ZipFile(zip_path, "w") as zipf:
             for idx, svg in enumerate(svg_files):
@@ -177,3 +161,4 @@ if uploaded_file:
                 file_name="all_pages.zip",
                 mime="application/zip"
             )
+
