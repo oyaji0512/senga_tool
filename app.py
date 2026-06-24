@@ -24,17 +24,22 @@ def pdf_to_pngs(pdf_path):
 # =========================
 # AI補正付き 前処理
 # =========================
-def preprocess_image(img_path, mode, blur_sigma, edge_sigma, thickness, photo_auto):
+def preprocess_image(
+    img_path,
+    mode,
+    blur_sigma,
+    edge_sigma,
+    thickness,
+    photo_auto,
+    brightness,
+    contrast,
+    sharpness,
+    denoise,
+):
     img = Image.open(img_path).convert("L")
     img = np.array(img)
 
-    # 写真用自動補正（Photo Auto Enhance）
-    if photo_auto and mode == "photo":
-        img = exposure.equalize_adapthist(img)
-        img = filters.gaussian(img, sigma=1.0)
-        img = (img * 255).astype(np.uint8)
-
-    # ぼかし（ノイズ除去）
+    # ぼかし（共通ノイズ除去）
     if blur_sigma > 0:
         img = filters.gaussian(img, sigma=blur_sigma)
 
@@ -72,8 +77,27 @@ def preprocess_image(img_path, mode, blur_sigma, edge_sigma, thickness, photo_au
 
     elif mode == "photo":
         # 写真用リアル線画：細部も残す
-        img_eq = exposure.equalize_adapthist(img)
-        edges = feature.canny(img_eq, sigma=edge_sigma)
+        img_f = img.astype(np.float32) / 255.0
+
+        # 写真用自動補正
+        if photo_auto:
+            img_f = exposure.equalize_adapthist(img_f)
+
+        # 写真専用ノイズ除去
+        if denoise > 0:
+            img_f = filters.gaussian(img_f, sigma=denoise)
+
+        # 明るさ補正
+        img_f = np.clip(img_f * brightness, 0.0, 1.0)
+
+        # コントラスト補正（ガンマ補正）
+        img_f = exposure.adjust_gamma(img_f, contrast)
+
+        # シャープネス（アンシャープマスク）
+        if sharpness > 0:
+            img_f = filters.unsharp_mask(img_f, radius=1.0, amount=sharpness)
+
+        edges = feature.canny(img_f, sigma=edge_sigma)
         processed = (edges * 255).astype(np.uint8)
 
     else:
@@ -101,8 +125,30 @@ def auto_potrace_params(img):
 # =========================
 # PNG → SVG 変換
 # =========================
-def png_to_svg(png_path, mode, blur_sigma, edge_sigma, thickness, photo_auto):
-    img = preprocess_image(png_path, mode, blur_sigma, edge_sigma, thickness, photo_auto)
+def png_to_svg(
+    png_path,
+    mode,
+    blur_sigma,
+    edge_sigma,
+    thickness,
+    photo_auto,
+    brightness,
+    contrast,
+    sharpness,
+    denoise,
+):
+    img = preprocess_image(
+        png_path,
+        mode,
+        blur_sigma,
+        edge_sigma,
+        thickness,
+        photo_auto,
+        brightness,
+        contrast,
+        sharpness,
+        denoise,
+    )
 
     temp_bmp = tempfile.NamedTemporaryFile(delete=False, suffix=".bmp")
     Image.fromarray(img).save(temp_bmp.name)
@@ -112,11 +158,17 @@ def png_to_svg(png_path, mode, blur_sigma, edge_sigma, thickness, photo_auto):
     temp_svg = tempfile.NamedTemporaryFile(delete=False, suffix=".svg")
 
     potrace_cmd = [
-        "potrace", "-s", "-o", temp_svg.name,
-        "--turdsize", params["turd"],
-        "--alphamax", params["alpha"],
-        "--opttolerance", params["opt"],
-        temp_bmp.name
+        "potrace",
+        "-s",
+        "-o",
+        temp_svg.name,
+        "--turdsize",
+        params["turd"],
+        "--alphamax",
+        params["alpha"],
+        "--opttolerance",
+        params["opt"],
+        temp_bmp.name,
     ]
 
     subprocess.run(potrace_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -128,8 +180,8 @@ def png_to_svg(png_path, mode, blur_sigma, edge_sigma, thickness, photo_auto):
 # =========================
 st.set_page_config(page_title="線画にせんか？", layout="wide")
 
-st.title("✏️ 線画にせんか？")
-st.write("PDF または画像を線画 SVG に変換します。（全機能版・AI補正対応）")
+st.title("✏️ 線画にせんか？（全機能版）")
+st.write("PDF / 画像を線画 SVG に変換します。図面・写真・簡易版すべて対応。")
 
 uploaded_file = st.file_uploader("PDF または PNG/JPG を選択", type=["pdf", "png", "jpg", "jpeg"])
 
@@ -144,7 +196,7 @@ mode = st.selectbox(
         "細線化（thinning）",
         "簡易版（simple）",
         "写真用（photo）",
-    ]
+    ],
 )
 
 mode_key = {
@@ -157,12 +209,25 @@ mode_key = {
     "写真用（photo）": "photo",
 }[mode]
 
-# AI補正スライダー
-st.subheader("AI補正（リアルタイム反映）")
-blur_sigma = st.slider("ぼかし量（ノイズ除去）", 0.0, 3.0, 0.0, 0.1)
+# 共通AI補正スライダー
+st.subheader("AI補正（共通）")
+blur_sigma = st.slider("ぼかし量（共通ノイズ除去）", 0.0, 3.0, 0.0, 0.1)
 edge_sigma = st.slider("エッジ強調（Canny σ）", 0.5, 3.0, 1.0, 0.1)
 thickness = st.slider("線の太さ（膨張）", 0, 5, 0)
 photo_auto = st.checkbox("写真用自動補正を有効にする（Photo Auto Enhance）", value=True)
+
+# 写真モード専用スライダー
+if mode_key == "photo":
+    st.subheader("写真補正スライダー")
+    brightness = st.slider("明るさ補正", 0.5, 2.0, 1.0, 0.1)
+    contrast = st.slider("コントラスト補正（γ）", 0.5, 2.0, 1.0, 0.1)
+    sharpness = st.slider("シャープネス", 0.0, 3.0, 1.0, 0.1)
+    denoise = st.slider("写真用ノイズ除去", 0.0, 3.0, 0.0, 0.1)
+else:
+    brightness = 1.0
+    contrast = 1.0
+    sharpness = 0.0
+    denoise = 0.0
 
 if uploaded_file:
     st.success("ファイルを読み込みました！")
@@ -186,7 +251,7 @@ if uploaded_file:
     # ページ切り替え
     page = st.number_input("プレビューするページを選択", 1, len(png_list), 1)
 
-    # 線画プレビュー生成（全モード + AI補正反映）
+    # 線画プレビュー生成（全モード + AI補正 + 写真補正反映）
     processed = preprocess_image(
         png_list[page - 1],
         mode_key,
@@ -194,8 +259,16 @@ if uploaded_file:
         edge_sigma,
         thickness,
         photo_auto,
+        brightness,
+        contrast,
+        sharpness,
+        denoise,
     )
     preview_img = Image.fromarray(processed)
+
+    # 写真モードの背景向け調整（白背景に黒線で統一したい場合はここで反転）
+    if mode_key == "photo":
+        preview_img = ImageOps.invert(preview_img)
 
     # 背景色切り替え
     bg_option = st.radio("背景色を選択", ["白（デフォルト）", "黒", "反転"])
@@ -213,7 +286,7 @@ if uploaded_file:
         use_column_width=True,
     )
 
-    # SVG変換（Simple/Photo含む全モード対応）
+    # SVG変換（全モード対応）
     if st.button("SVG に変換する"):
         svg_files = []
         progress = st.progress(0)
@@ -226,6 +299,10 @@ if uploaded_file:
                 edge_sigma,
                 thickness,
                 photo_auto,
+                brightness,
+                contrast,
+                sharpness,
+                denoise,
             )
             svg_files.append(svg_path)
             progress.progress((i + 1) / len(png_list))
