@@ -22,39 +22,50 @@ def pdf_to_pngs(pdf_path):
     return png_paths
 
 # =========================
-# 前処理（OpenCV 不使用）
+# AI補正付き 前処理
 # =========================
-def preprocess_image(img_path, mode):
+def preprocess_image(img_path, mode, blur_sigma, edge_sigma, thickness):
     img = Image.open(img_path).convert("L")
     img = np.array(img)
 
+    # ぼかし（ノイズ除去）
+    if blur_sigma > 0:
+        img = filters.gaussian(img, sigma=blur_sigma)
+
+    # モード別処理
     if mode == "raw":
-        return img
+        processed = img
 
-    if mode == "light":
-        img = filters.gaussian(img, sigma=1)
+    elif mode == "light":
         thresh = filters.threshold_otsu(img)
-        return (img > thresh).astype(np.uint8) * 255
+        processed = (img > thresh).astype(np.uint8) * 255
 
-    if mode == "normal":
+    elif mode == "normal":
         img = filters.median(img, morphology.disk(2))
         img = exposure.equalize_adapthist(img)
-        edges = feature.canny(img, sigma=1)
-        return (edges * 255).astype(np.uint8)
+        edges = feature.canny(img, sigma=edge_sigma)
+        processed = (edges * 255).astype(np.uint8)
 
-    if mode == "strong":
+    elif mode == "strong":
         img = filters.median(img, morphology.disk(3))
         img = exposure.equalize_adapthist(img)
-        edges = feature.canny(img, sigma=2)
-        return (edges * 255).astype(np.uint8)
+        edges = feature.canny(img, sigma=edge_sigma + 1)
+        processed = (edges * 255).astype(np.uint8)
 
-    if mode == "thinning":
+    elif mode == "thinning":
         thresh = filters.threshold_otsu(img)
         binary = img > thresh
         thin = morphology.thin(binary)
-        return (thin * 255).astype(np.uint8)
+        processed = (thin * 255).astype(np.uint8)
 
-    return img
+    else:
+        processed = img
+
+    # 太さ調整（膨張）
+    if thickness > 0:
+        processed = morphology.dilation(processed, morphology.disk(thickness))
+
+    return processed
 
 # =========================
 # Potrace 自動最適化
@@ -72,8 +83,8 @@ def auto_potrace_params(img):
 # =========================
 # PNG → SVG 変換
 # =========================
-def png_to_svg(png_path, mode="normal"):
-    img = preprocess_image(png_path, mode)
+def png_to_svg(png_path, mode, blur_sigma, edge_sigma, thickness):
+    img = preprocess_image(png_path, mode, blur_sigma, edge_sigma, thickness)
 
     temp_bmp = tempfile.NamedTemporaryFile(delete=False, suffix=".bmp")
     Image.fromarray(img).save(temp_bmp.name)
@@ -100,10 +111,11 @@ def png_to_svg(png_path, mode="normal"):
 st.set_page_config(page_title="線画にせんか？", layout="wide")
 
 st.title("✏️ 線画にせんか？")
-st.write("PDF または画像を線画 SVG に変換します。（OpenCV 不使用・Cloud 完全対応）")
+st.write("PDF または画像を線画 SVG に変換します。（AI補正・プレビュー対応）")
 
 uploaded_file = st.file_uploader("PDF または PNG/JPG を選択", type=["pdf", "png", "jpg", "jpeg"])
 
+# 前処理モード
 mode = st.selectbox(
     "前処理モードを選択",
     ["なし（raw）", "軽め（light）", "標準（normal）", "強め（strong）", "細線化（thinning）"]
@@ -116,6 +128,12 @@ mode_key = {
     "強め（strong）": "strong",
     "細線化（thinning）": "thinning"
 }[mode]
+
+# AI補正スライダー
+st.subheader("AI補正（リアルタイム反映）")
+blur_sigma = st.slider("ぼかし量（ノイズ除去）", 0.0, 3.0, 0.0, 0.1)
+edge_sigma = st.slider("エッジ強調（Canny σ）", 0.5, 3.0, 1.0, 0.1)
+thickness = st.slider("線の太さ（膨張）", 0, 5, 0)
 
 if uploaded_file:
     st.success("ファイルを読み込みました！")
@@ -136,44 +154,43 @@ if uploaded_file:
 
     st.write(f"ページ数：{len(png_list)}")
 
-    # =========================
-    # ページ切り替え UI
-    # =========================
+    # ページ切り替え
     page = st.number_input("プレビューするページを選択", 1, len(png_list), 1)
-    preview_img = Image.open(png_list[page - 1])
 
-    # =========================
-    # 背景色切り替え UI
-    # =========================
+    # 線画プレビュー生成
+    processed = preprocess_image(
+        png_list[page - 1],
+        mode_key,
+        blur_sigma,
+        edge_sigma,
+        thickness
+    )
+    preview_img = Image.fromarray(processed)
+
+    # 背景色切り替え
     bg_option = st.radio("背景色を選択", ["白（デフォルト）", "黒", "反転"])
 
     base_img = preview_img.convert("RGB")
 
     if bg_option == "白（デフォルト）":
         shown_img = base_img
-    elif bg_option == "黒":
-        shown_img = ImageOps.invert(base_img)
-    else:  # 反転
+    else:
         shown_img = ImageOps.invert(base_img)
 
     st.subheader("プレビュー")
     st.image(shown_img, caption=f"{page} ページ目のプレビュー（{bg_option}）", use_column_width=True)
 
-    # =========================
-    # SVG 変換
-    # =========================
+    # SVG変換
     if st.button("SVG に変換する"):
         svg_files = []
 
         progress = st.progress(0)
         for i, png in enumerate(png_list):
-            svg_path = png_to_svg(png, mode_key)
+            svg_path = png_to_svg(png, mode_key, blur_sigma, edge_sigma, thickness)
             svg_files.append(svg_path)
 
-            if i % 2 == 0:
-                progress.progress((i + 1) / len(png_list))
+            progress.progress((i + 1) / len(png_list))
 
-        progress.progress(1.0)
         st.success("変換が完了しました！")
 
         zip_path = tempfile.NamedTemporaryFile(delete=False, suffix=".zip").name
