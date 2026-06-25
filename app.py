@@ -181,7 +181,7 @@ def png_to_svg(
 # =========================
 st.set_page_config(page_title="線画にせんか？", layout="wide")
 
-st.title("✏️ 線画にせんか？（安定版＋SVGプレビュー）")
+st.title("✏️ 線画にせんか？")
 st.write("PDF / 画像を線画 SVG に変換します。図面・写真・簡易版すべて手動選択で安定動作。")
 
 uploaded_file = st.file_uploader("PDF または PNG/JPG を選択", type=["pdf", "png", "jpg", "jpeg"])
