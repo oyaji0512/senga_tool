@@ -282,10 +282,10 @@ if uploaded_file:
         shown_img = ImageOps.invert(base_img)
 
     st.subheader("プレビュー")
-    st.image(
-        shown_img,
-        caption=f"{page} ページ目のプレビュー（{mode_label} / {bg_option}）",
-        use_column_width=True,
+   st.image(
+    shown_img,
+    caption=f"{page} ページ目のプレビュー（{mode_label} / {bg_option}）",
+    width=800
     )
 
     # SVG変換（全ページ）
